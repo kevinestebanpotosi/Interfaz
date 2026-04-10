@@ -8,7 +8,14 @@ class TabAnalisis:
     def __init__(self, parent):
         self.frame = tk.Frame(parent, bg=BG_GLOBAL)
         self.frame.pack(expand=True, fill="both", padx=2, pady=2)
-        
+
+        self._t_s = []
+        self._alt_m = []
+        self._pres_hpa = []
+        self._temp_c = []
+        self._vel_mps = []
+        self._az = []
+
         self._construir()
 
     def _construir(self):
@@ -90,8 +97,102 @@ class TabAnalisis:
             for spine in ax.spines.values():
                 spine.set_color(COLOR_ACENTO)
 
+        # Lines (initialized empty; updated on telemetry)
+        (self._line_alt,) = self.ax_alt.plot([], [], color=COLOR_ACENTO, linewidth=1.5)
+        (self._line_pres,) = self.ax_pres.plot([], [], color=COLOR_ACENTO, linewidth=1.5)
+        (self._line_temp,) = self.ax_temp.plot([], [], color=COLOR_ACENTO, linewidth=1.5)
+        (self._line_vel,) = self.ax_vel.plot([], [], color=COLOR_ACENTO, linewidth=1.5)
+        (self._line_az,) = self.ax_acel.plot([], [], color=COLOR_ACENTO, linewidth=1.5)
+
         self.canvas_grafico = FigureCanvasTkAgg(self.figura, master=frame_graficos)
         self.canvas_grafico.get_tk_widget().pack(expand=True, fill="both", padx=5, pady=5)
+
+    def apply_telemetry(self, data: dict):
+        # Update numeric indicators (best-effort; data values are strings)
+        if "pressure_hpa" in data:
+            self.var_presion.set(f"{float(data['pressure_hpa']):.2f}")
+        if "temperature" in data:
+            self.var_temp.set(f"{float(data['temperature']):.2f}")
+        if "lat" in data:
+            self.var_lat.set(f"{float(data['lat']):.6f}")
+        if "lon" in data:
+            self.var_lon.set(f"{float(data['lon']):.6f}")
+
+        # Reuse altitude field for "Alt. GPS" display (you can swap later if you send a true GPS altitude)
+        if "altitude" in data:
+            self.var_alt_gps.set(f"{float(data['altitude']):.2f}")
+
+        # gps_data may include satellites; if it's just a blob, keep sats as-is
+        if "gps_ready" in data:
+            self.var_autogiro.set("TELEMETRÍA ACTIVA" if str(data["gps_ready"]).strip() in ("1", "true", "TRUE") else "EN ESPERA")
+
+        # IMU
+        if "ax_f" in data:
+            self.var_ax.set(f"{float(data['ax_f']):.2f}")
+        if "ay_f" in data:
+            self.var_ay.set(f"{float(data['ay_f']):.2f}")
+        if "az_f" in data:
+            self.var_az.set(f"{float(data['az_f']):.2f}")
+        if "gx" in data:
+            self.var_gx.set(f"{float(data['gx']):.2f}")
+        if "gy" in data:
+            self.var_gy.set(f"{float(data['gy']):.2f}")
+        if "gz" in data:
+            self.var_gz.set(f"{float(data['gz']):.2f}")
+
+        # Velocity derived by receiver (optional)
+        if "vel_mps" in data:
+            try:
+                self.var_vel.set(f"{float(data['vel_mps']):.2f}")
+            except Exception:
+                pass
+
+        # Plots (keep last N points)
+        try:
+            t_s = float(data.get("uwTick", 0.0)) / 1000.0
+        except Exception:
+            t_s = (self._t_s[-1] + 0.05) if self._t_s else 0.0
+
+        def add(series, val):
+            series.append(val)
+            if len(series) > 250:
+                del series[: len(series) - 250]
+
+        add(self._t_s, t_s)
+
+        try:
+            add(self._alt_m, float(data.get("altitude", "nan")))
+        except Exception:
+            add(self._alt_m, float("nan"))
+        try:
+            add(self._pres_hpa, float(data.get("pressure_hpa", "nan")))
+        except Exception:
+            add(self._pres_hpa, float("nan"))
+        try:
+            add(self._temp_c, float(data.get("temperature", "nan")))
+        except Exception:
+            add(self._temp_c, float("nan"))
+        try:
+            add(self._vel_mps, float(data.get("vel_mps", "nan")))
+        except Exception:
+            add(self._vel_mps, float("nan"))
+        try:
+            add(self._az, float(data.get("az_f", "nan")))
+        except Exception:
+            add(self._az, float("nan"))
+
+        # Update line data
+        self._line_alt.set_data(self._t_s, self._alt_m)
+        self._line_pres.set_data(self._t_s, self._pres_hpa)
+        self._line_temp.set_data(self._t_s, self._temp_c)
+        self._line_vel.set_data(self._t_s, self._vel_mps)
+        self._line_az.set_data(self._t_s, self._az)
+
+        for ax in [self.ax_alt, self.ax_pres, self.ax_temp, self.ax_vel, self.ax_acel]:
+            ax.relim()
+            ax.autoscale_view()
+
+        self.canvas_grafico.draw_idle()
 
     def _crear_indicador(self, parent, titulo, variable, unidad):
         frame = tk.Frame(parent, bg=BG_CONTENEDOR)
