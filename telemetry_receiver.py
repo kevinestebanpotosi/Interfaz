@@ -120,10 +120,10 @@ class SerialTelemetryReceiver:
         try:
             self._ser = serial.Serial(port, baudrate, timeout=self._serial_timeout_s)
             
-            # 🔥 CONFIGURACIÓN DE RADIO (SF7 + ADDR 0)
-            self._ser.write(b'AT+ADDRESS=0\r\n') 
+            # 🔥 CONFIGURACIÓN CRÍTICA DE RADIO (SF7 + ADDR 0) - NO TOCAR
+            self._ser.write(b'AT+ADDRESS=0\r\n')
             time.sleep(0.2)
-            self._ser.write(b'AT+PARAMETER=7,7,1,12\r\n') 
+            self._ser.write(b'AT+PARAMETER=7,7,1,12\r\n')
             time.sleep(0.5)
             
             self._emit(TelemetryEvent(kind="status", message=f"✅ Estación Terrena SF7 Lista en {port}", ts=time.time()))
@@ -136,23 +136,25 @@ class SerialTelemetryReceiver:
 
         while not self._stop.is_set():
             now = time.time()
-            
-            # --- BLINDAJE: Timeout de imagen (3s de silencio = Ensamblar lo que haya) ---
-            if self._img_total_expected is not None and (now - self._img_last_recv_ts > 5.0):
-                self._emit(TelemetryEvent(kind="warn", message="⚠️ Timeout de ráfaga. Finalizando imagen parcial.", ts=now))
+
+            # --- CORRECCIÓN: Timeout más generoso para enlaces Lejanos (10s)
+            if self._img_total_expected is not None and (now - self._img_last_recv_ts > 10.0):
+                self._emit(TelemetryEvent(kind="warn", message="⚠️ Timeout de ráfaga. Intentando recuperar foto parcial.", ts=now))
                 self._ensamblar_y_emitir_imagen(final=True)
 
             # --- LECTURA DEL PUERTO ---
             try:
                 if self._ser.in_waiting > 0:
                     raw = self._ser.readline().decode("utf-8", "ignore").strip()
-                    if not raw: continue
-                    
+                    if not raw:
+                        continue
+
                     self._img_last_recv_ts = time.time()
                     self._emit(TelemetryEvent(kind="raw", raw=raw, ts=time.time()))
-                    
+
                     payload = parse_rcv(raw)
-                    if payload: self._procesar_payload(payload)
+                    if payload:
+                        self._procesar_payload(payload)
             except Exception as e:
                 self._emit(TelemetryEvent(kind="error", message=f"Error en lectura: {e}"))
                 break
@@ -183,25 +185,32 @@ class SerialTelemetryReceiver:
             pkt_num, total_pkts, dlen = struct.unpack(">HHB", hdr)
             crc_start = 7 + dlen
             payload_bytes = frame[7:7 + dlen]
+
+            # Validación CRC
             recv_crc = struct.unpack(">H", frame[crc_start:crc_start + 2])[0]
-            
             if self._crc16(frame[:crc_start]) != recv_crc:
                 return
 
-            if pkt_num == 0: # METADATOS
+            if pkt_num == 0:  # METADATOS (contiene cabecera / paquete 1)
                 if self._img_total_expected is None:
                     self._img_total_expected = total_pkts - 1
                     self._img_packets.clear()
-                    self._emit(TelemetryEvent(kind="status", message="📦 Recibiendo nueva captura..."))
-            else: # FRAGMENTO
+                    # Resetear reloj para esperar paquetes
+                    self._img_last_recv_ts = time.time()
+                    self._emit(TelemetryEvent(kind="status", message="📦 Recibiendo datos de imagen..."))
+            else:  # FRAGMENTO
                 if pkt_num not in self._img_packets:
                     self._img_packets[pkt_num] = payload_bytes
-                    # 🔥 Previsualización incremental
-                    self._ensamblar_y_emitir_imagen(final=False)
-                
+
+                    # Previsualizar solo si tenemos el paquete 1 (cabecera)
+                    # y al menos 3 fragmentos para evitar buffers mayoritariamente nulos
+                    if 1 in self._img_packets and len(self._img_packets) >= 3:
+                        self._ensamblar_y_emitir_imagen(final=False)
+
                 if self._img_total_expected and len(self._img_packets) == self._img_total_expected:
                     self._ensamblar_y_emitir_imagen(final=True)
-        except: pass
+        except Exception as e:
+            self._emit(TelemetryEvent(kind="warn", message=f"Error en trama: {e}"))
 
     def _procesar_telemetria(self, data: Dict[str, str]):
         alt_m = _to_float(data.get("altitude"))
@@ -218,23 +227,29 @@ class SerialTelemetryReceiver:
         self._send_ack_cmd(data.get("pkt_id", "0"))
 
     def _ensamblar_y_emitir_imagen(self, final=False):
-        if not self._img_total_expected: return
-        
+        if not self._img_total_expected:
+            return
+
+        # Si no tenemos el paquete 1 (cabecera), no tiene sentido intentar mostrar
+        if 1 not in self._img_packets:
+            return
+
         # Construir buffer (rellenando huecos con 100 bytes de negro)
         image_data = b""
         for i in range(1, self._img_total_expected + 1):
             image_data += self._img_packets.get(i, b"\x00" * 100)
-        
-        # Definir mensaje de evento
+
         ev_msg = f"captura_{int(time.time())}.jpg" if final else "preview.jpg"
-        
+
         # Enviar a la UI
         self._emit(TelemetryEvent(kind="image", message=ev_msg, telemetry={"image_bytes": image_data}, ts=time.time()))
 
         if final:
             try:
-                with open(ev_msg, "wb") as f: f.write(image_data)
-            except: pass
-            # 🔥 Limpieza de memoria solo al finalizar
+                with open(ev_msg, "wb") as f:
+                    f.write(image_data)
+            except Exception:
+                pass
+            # Limpieza de memoria solo al finalizar
             self._img_packets.clear()
             self._img_total_expected = None
