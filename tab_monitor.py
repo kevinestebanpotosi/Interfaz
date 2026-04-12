@@ -20,12 +20,12 @@ class TabMonitor:
         ttk.Label(frame_conexion, text="Puerto:").pack(side="left", padx=5)
         self.combo_puerto = ttk.Combobox(
             frame_conexion,
-            values=["/dev/cu.usbserial-0001", "/dev/cu.usbmodemXXXX", "/dev/cu.SLAB_USBtoUART", "/dev/ttyUSB0", "COM3"],
+            values=["COM7", "/dev/cu.usbserial-0001", "/dev/cu.usbmodemXXXX", "/dev/cu.SLAB_USBtoUART", "/dev/ttyUSB0", "COM3"],
             width=22,
         )
         self.combo_puerto.pack(side="left", padx=5)
         if not self.combo_puerto.get():
-            self.combo_puerto.set("/dev/cu.usbserial-0001")
+            self.combo_puerto.set("COM7")
 
         ttk.Label(frame_conexion, text="Baudios:").pack(side="left", padx=5)
         self.combo_baudios = ttk.Combobox(frame_conexion, values=["9600", "57600", "115200"], width=10)

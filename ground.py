@@ -6,7 +6,7 @@
 import serial, time, os, csv
 
 # ── Config ───────────────────────────────────────────────────
-PORT      = "/dev/cu.usbserial-0001"   # ← change to your port
+PORT      = "COM7"   # ← change to your port
 BAUDRATE  = 115200
 SAT_ADDR  = 1
 SAVE_FILE = "telemetry.csv"
@@ -35,22 +35,31 @@ if write_header:
 print("[BASE] Saving to: {}".format(SAVE_FILE))
 
 # ── Serial ────────────────────────────────────────────────────
-ser = serial.Serial(PORT, BAUDRATE, timeout=1)
-time.sleep(1)
-print("[BASE] ✅ Connected to {}".format(PORT))
+try:
+    ser = serial.Serial(PORT, BAUDRATE, timeout=1)
+    time.sleep(1)
+    print("[BASE] ✅ Connected to {}".format(PORT))
+except Exception as e:
+    print(f"[ERR] No se pudo abrir el puerto {PORT}: {e}")
+    exit()
 
 # ── Helpers ───────────────────────────────────────────────────
-def parse_rcv(line):
-    """Extract payload from +RCV=addr,len,data,..."""
+def parse_rcv(line: str):
+    """Extracción ROBUSTA para evitar cortes por las comas del CSV"""
     if not line.startswith("+RCV="):
         return None
-    inner  = line[5:]
-    parts  = inner.split(",", 4)
+    inner = line[5:]
+    
+    parts = inner.split(",", 2)
     if len(parts) < 3:
         return None
-    raw    = ",".join(parts[2:])
-    tokens = raw.rsplit(",", 2)   # strip trailing RSSI,SNR
-    return tokens[0]
+        
+    raw_data_rssi_snr = parts[2]
+    tokens = raw_data_rssi_snr.rsplit(",", 2) 
+    if len(tokens) < 3:
+        return None
+        
+    return tokens[0] 
 
 def send_ack(pkt_id):
     payload = "ACK,{}".format(pkt_id)
@@ -78,6 +87,11 @@ while True:
 
     payload = parse_rcv(raw)
     if payload is None:
+        continue
+
+    # 🔴 Seguro Anti-Imágenes 🔴
+    if "," not in payload:
+        print("[IMG] 🖼️  Fragmento de imagen detectado. Ignorando en la consola CSV...")
         continue
 
     data = parse_telemetry(payload)

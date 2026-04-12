@@ -70,6 +70,27 @@ class EstacionTerrenaCanSat:
                     self.tab_analisis.apply_telemetry(ev.telemetry)
                 except Exception as e:
                     self.tab_monitor.show_event(kind="error", message=f"UI telemetry update failed: {e}")
+            elif ev.kind == "image":
+                # Image event: display in images tab
+                try:
+                    img_bytes = None
+                    if ev.telemetry and isinstance(ev.telemetry, dict):
+                        img_bytes = ev.telemetry.get("image_bytes")
+                    if img_bytes is None and ev.message:
+                        # fallback: read file saved by receiver
+                        try:
+                            with open(ev.message, "rb") as f:
+                                img_bytes = f.read()
+                        except Exception:
+                            img_bytes = None
+                    if img_bytes is not None:
+                        try:
+                            self.tab_imagenes.show_image(img_bytes)
+                            self.tab_monitor.show_event(kind="status", message=f"Image displayed: {ev.message}")
+                        except Exception as e:
+                            self.tab_monitor.show_event(kind="warn", message=f"Image display failed: {e}")
+                except Exception as e:
+                    self.tab_monitor.show_event(kind="warn", message=f"Image event handling error: {e}")
 
         self.root.after(50, self._drain_events)
 
