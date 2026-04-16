@@ -108,48 +108,109 @@ class TabAnalisis:
         self.canvas_grafico.get_tk_widget().pack(expand=True, fill="both", padx=5, pady=5)
 
     def apply_telemetry(self, data: dict):
+        # Helper to accept either English or Spanish field names
+        def getf(*names, default=None):
+            for n in names:
+                if n in data and data[n] not in (None, ""):
+                    return data[n]
+            return default
+
         # Update numeric indicators (best-effort; data values are strings)
-        if "pressure_hpa" in data:
-            self.var_presion.set(f"{float(data['pressure_hpa']):.2f}")
-        if "temperature" in data:
-            self.var_temp.set(f"{float(data['temperature']):.2f}")
-        if "lat" in data:
-            self.var_lat.set(f"{float(data['lat']):.6f}")
-        if "lon" in data:
-            self.var_lon.set(f"{float(data['lon']):.6f}")
+        pres = getf("pressure_hpa", "presion_hpa")
+        if pres is not None:
+            try:
+                self.var_presion.set(f"{float(pres):.2f}")
+            except Exception:
+                pass
+
+        temp = getf("temperature", "temperatura")
+        if temp is not None:
+            try:
+                self.var_temp.set(f"{float(temp):.2f}")
+            except Exception:
+                pass
+
+        lat = getf("lat", "lat")
+        if lat is not None:
+            try:
+                self.var_lat.set(f"{float(lat):.6f}")
+            except Exception:
+                pass
+
+        lon = getf("lon", "lon")
+        if lon is not None:
+            try:
+                self.var_lon.set(f"{float(lon):.6f}")
+            except Exception:
+                pass
 
         # Reuse altitude field for "Alt. GPS" display (you can swap later if you send a true GPS altitude)
-        if "altitude" in data:
-            self.var_alt_gps.set(f"{float(data['altitude']):.2f}")
+        alt = getf("altitude", "altitud")
+        if alt is not None:
+            try:
+                self.var_alt_gps.set(f"{float(alt):.2f}")
+            except Exception:
+                pass
 
         # gps_data may include satellites; if it's just a blob, keep sats as-is
-        if "gps_ready" in data:
-            self.var_autogiro.set("TELEMETRÍA ACTIVA" if str(data["gps_ready"]).strip() in ("1", "true", "TRUE") else "EN ESPERA")
+        gps_ready = getf("gps_ready", "gps_ready", "estado_paracaidas")
+        if gps_ready is not None:
+            self.var_autogiro.set("TELEMETRÍA ACTIVA" if str(gps_ready).strip() in ("1", "true", "TRUE") else "EN ESPERA")
 
         # IMU
-        if "ax_f" in data:
-            self.var_ax.set(f"{float(data['ax_f']):.2f}")
-        if "ay_f" in data:
-            self.var_ay.set(f"{float(data['ay_f']):.2f}")
-        if "az_f" in data:
-            self.var_az.set(f"{float(data['az_f']):.2f}")
-        if "gx" in data:
-            self.var_gx.set(f"{float(data['gx']):.2f}")
-        if "gy" in data:
-            self.var_gy.set(f"{float(data['gy']):.2f}")
-        if "gz" in data:
-            self.var_gz.set(f"{float(data['gz']):.2f}")
+        ax = getf("ax_f", "ax")
+        if ax is not None:
+            try:
+                self.var_ax.set(f"{float(ax):.2f}")
+            except Exception:
+                pass
+        ay = getf("ay_f", "ay")
+        if ay is not None:
+            try:
+                self.var_ay.set(f"{float(ay):.2f}")
+            except Exception:
+                pass
+        az = getf("az_f", "az")
+        if az is not None:
+            try:
+                self.var_az.set(f"{float(az):.2f}")
+            except Exception:
+                pass
+        gx = getf("gx", "gx")
+        if gx is not None:
+            try:
+                self.var_gx.set(f"{float(gx):.2f}")
+            except Exception:
+                pass
+        gy = getf("gy", "gy")
+        if gy is not None:
+            try:
+                self.var_gy.set(f"{float(gy):.2f}")
+            except Exception:
+                pass
+        gz = getf("gz", "gz")
+        if gz is not None:
+            try:
+                self.var_gz.set(f"{float(gz):.2f}")
+            except Exception:
+                pass
 
         # Velocity derived by receiver (optional)
-        if "vel_mps" in data:
+        vel = getf("vel_mps", "vel_mps")
+        if vel is not None:
             try:
-                self.var_vel.set(f"{float(data['vel_mps']):.2f}")
+                self.var_vel.set(f"{float(vel):.2f}")
             except Exception:
                 pass
 
         # Plots (keep last N points)
+        # Prefer receiver timestamp fields
         try:
-            t_s = float(data.get("uwTick", 0.0)) / 1000.0
+            t_ms = getf("uwTick", "timestamp_ms")
+            if t_ms is None:
+                t_s = (self._t_s[-1] + 0.05) if self._t_s else 0.0
+            else:
+                t_s = float(t_ms) / 1000.0
         except Exception:
             t_s = (self._t_s[-1] + 0.05) if self._t_s else 0.0
 
