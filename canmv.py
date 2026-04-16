@@ -35,6 +35,18 @@ lora.write(b'AT+ADDRESS=1\r\n')           # El satélite es la dirección 1
 time.sleep(0.5)
 lora.write(b'AT+PARAMETER=7,7,1,12\r\n')  # SF7 (el primer 7) coincidente con la PC
 time.sleep(1)
+# NUEVO: CONFIGURACIÓN UART PARA LA STM32
+# ============================================================
+STM_RX_PIN = 4
+STM_TX_PIN = 3
+fpioa.set_function(STM_RX_PIN, FPIOA.UART1_RXD) # RX1 escucha al TX de STM32
+fpioa.set_function(STM_TX_PIN, FPIOA.UART1_TXD)
+telemetria_stm = None
+try:
+    telemetria_stm = UART(UART.UART1, baudrate=115200, bits=UART.EIGHTBITS, parity=UART.PARITY_NONE, stop=UART.STOPBITS_ONE)
+    print("✅ UART1 inicializada (STM32 conectada en IO4).")
+except Exception as e:
+    print(f"❌ Error al inicializar UART de telemetría: {e}")
 
 # ─── 2. CLASES DE INTELIGENCIA ARTIFICIAL ───────────────────────────────────
 def ALIGN_UP(x, align):
@@ -67,7 +79,7 @@ class DepthNetApp(AIBase):
         return np.array(mapa_norm, dtype=np.uint8)
 
 # OPTIMIZACIÓN: Procesamos a menor resolución (112x112) para que el bucle `for` vuele.
-def crear_anaglifo_np(img_cam_np, mapa_np, size=112, max_shift=8):
+def crear_anaglifo_np(img_cam_np, mapa_np, size=224, max_shift=80):
     # En este ejemplo simplificado, asumimos que procesamos un cuadro central
     out_img = image.Image(size, size, image.RGB565)
     offset_y = (480 - size) // 2
@@ -75,13 +87,13 @@ def crear_anaglifo_np(img_cam_np, mapa_np, size=112, max_shift=8):
 
     # Redimensionamos el mapa de profundidad para que coincida con el nuevo tamaño
     # (Para simplificar, tomamos un "paso" de 2 del mapa original de 224x224)
-    mapa_reducido = mapa_np[::2, ::2]
+    #mapa_reducido = mapa_np[::2, ::2]
 
     for y in range(size):
         y_real = y + offset_y
         for x in range(size):
             # Usamos el mapa reducido
-            prof = int(mapa_reducido[y, x])
+            prof = int(mapa_np[y, x])
             shift = (prof * max_shift) // 255
             x_r = min(max(x + offset_x - shift, 0), 639)
             x_c = min(max(x + offset_x + shift, 0), 639)
@@ -113,7 +125,7 @@ try:
     print(f"   (Tiempo de procesamiento píxel a píxel: {time.ticks_diff(t_end, t_start)}ms)")
 
     print("🗜️ Comprimiendo imagen JPEG...")
-    img_comprimida = img_3d.compress(quality=20)
+    img_comprimida = img_3d.compress(quality=35)
     image_data = bytes(img_comprimida)
     print(f"✅ ¡Carga Útil lista! Tamaño ultraligero: {len(image_data)} bytes")
 
@@ -128,28 +140,54 @@ del img_np, mapa_np
 gc.collect()
 
 # ─── 4. FUNCIONES DE TELEMETRÍA Y RADIO ─────────────────────────────────────
-pkt_id = 0
-def get_mock_data():
-    global pkt_id
-    pkt_id += 1
-    t = time.ticks_ms() / 1000.0
-    ax_f = round(-0.11 + 0.15 * math.sin(t * 2.1), 2)
-    ay_f = round( 0.03 + 0.12 * math.cos(t * 1.7), 2)
-    az_f = round( 9.81 + 0.30 * math.sin(t * 1.3), 2)
-    gx = round(-1.03 + 0.40 * math.sin(t * 1.9), 2)
-    gy = round( 2.79 + 0.35 * math.cos(t * 2.3), 2)
-    gz = round(-0.23 + 0.20 * math.sin(t * 1.5), 2)
-    temperature = round(30.60 + 1.50 * math.sin(t * 0.3), 1)
-    pressure_hpa = round(900.8 - 0.05 * pkt_id, 1)
-    lat = round(19.4326 + 0.0005 * math.sin(t * 0.4), 5)
-    lon = round(-99.1332 + 0.0005 * math.cos(t * 0.4), 5)
-    roll = round(-0.67 + 0.30 * math.sin(t * 1.1), 2)
-    pitch = round( 8.69 + 0.25 * math.cos(t * 0.9), 2)
-    altitude = round(980.9 - 1.5 * pkt_id, 1)
-    uwTick = time.ticks_ms()
-    # Cadena optimizada: Reducción de decimales y eliminación de variables inútiles
-    return f"{pkt_id},{ax_f},{ay_f},{az_f},{gx},{gy},{gz},{temperature},{pressure_hpa},112,{lat},{lon},{roll},{pitch},{altitude},1,1,{uwTick}"
+# ─── 4. FUNCIONES DE TELEMETRÍA Y RADIO ─────────────────────────────────────
 
+pkt_id = 0  # Necesitamos mantener el contador de paquetes
+
+def obtener_telemetria_real():
+    global pkt_id
+    if telemetria_stm is None or not telemetria_stm.any():
+        return None
+
+    ultimo_mensaje = None
+
+    # ⚠️ CLAVE: Drenar TODO el buffer para obtener el dato más FRESCO
+    while telemetria_stm.any() > 0:
+        try:
+            linea = telemetria_stm.readline()
+            if linea:
+                decodificado = linea.decode('utf-8', 'ignore').strip()
+                if "STATE" in decodificado or "ACC" in decodificado:
+                    ultimo_mensaje = decodificado
+        except:
+            pass
+
+    # Si no capturó nada válido, retorna None
+    if not ultimo_mensaje:
+        return None
+
+    # --- PROCESO DE PARSEO SOBRE EL DATO MÁS RECIENTE ---
+    state, ax, ay, az, gx, gy, gz, temp, pres, alt = "0","0","0","0","0","0","0","0","0","0"
+
+    partes = ultimo_mensaje.split('|')
+    for p in partes:
+        p = p.strip()
+        if p.startswith("STATE:"): state = p.split(':')[1].strip()
+        elif p.startswith("ACC:"):
+            v = p.replace("ACC:", "").strip().split()
+            if len(v) >= 3: ax, ay, az = v[0], v[1], v[2]
+        elif p.startswith("GYR:"):
+            v = p.replace("GYR:", "").strip().split()
+            if len(v) >= 3: gx, gy, gz = v[0], v[1], v[2]
+        elif p.startswith("TEMP:"): temp = p.split(':')[1].strip()
+        elif p.startswith("P:"): pres = p.split(':')[1].strip()
+        elif p.startswith("ALT:"): alt = p.split(':')[1].strip()
+
+    pkt_id += 1
+    uwTick = time.ticks_ms()
+
+    return f"{pkt_id},{ax},{ay},{az},{gx},{gy},{gz},{temp},{pres},{alt},{state},{uwTick}"
+# ... (Continúa con crc16, lora_readline, etc) ...
 def crc16(data: bytes) -> int:
     crc = 0xFFFF
     for b in data:
@@ -184,31 +222,39 @@ def wait_ack(expected_id, timeout_ms=ACK_TIMEOUT):
         if "+RCV=" in line and expected_str in line: return True
     return False
 
+# --- REEMPLAZA TU FUNCIÓN send_image_chunk POR ESTA VERSIÓN "FAST" ---
+# --- 1. FUNCIÓN DE ENVÍO DE IMAGEN MEJORADA ---
 def send_image_chunk(uart, pkt_num, total_pkts, payload: bytes):
+    # Crear el frame binario
     header = ustruct.pack('>HHHB', 0xAA55, pkt_num, total_pkts, len(payload))
     frame = header + payload
     frame += ustruct.pack('>H', crc16(frame))
-    b64_frame = ubinascii.b2a_base64(frame).strip()
-    cmd = b"AT+SEND=" + str(GROUND_ADDR).encode() + b"," + str(len(b64_frame)).encode() + b"," + b64_frame + b"\r\n"
 
-    for _ in range(3):
+    # Convertir a Base64 y limpiar
+    b64_frame = ubinascii.b2a_base64(frame).strip().decode()
+
+    # Construir comando exacto
+    cmd = f"AT+SEND={GROUND_ADDR},{len(b64_frame)},{b64_frame}\r\n"
+
+    # Intentar enviar y esperar que el módulo acepte el comando
+    for intento in range(2):
         uart.write(cmd)
-        resp = ""
+        # Esperar respuesta del módulo LoRa (+OK)
         start = time.ticks_ms()
-        while time.ticks_diff(time.ticks_ms(), start) < 1000:
+        while time.ticks_diff(time.ticks_ms(), start) < 400: # Timeout de 400ms
             if uart.any():
-                resp += uart.read().decode('utf-8', 'ignore')
-                if "\n" in resp: break
-        if "+OK" in resp:
-            break
-        else:
-            time.sleep_ms(300)
+                resp = uart.read().decode('utf-8', 'ignore')
+                if "+OK" in resp:
+                    time.sleep_ms(100) # Respiro para el hardware
+                    return True
+                if "+ERR" in resp:
+                    break
+        time.sleep_ms(200) # Esperar antes de reintentar si falló
+    return False
 
-    # Respiro de radio ajustado para la nueva velocidad
-    time.sleep_ms(200)
-
-# ─── 5. FASE DE TRANSMISIÓN ─────────────────────────────────────────────────
-MAX_PAYLOAD = 100 # Subimos levemente el payload dado que la velocidad es mayor
+# ─── 5. FASE DE TRANSMISIÓN (VERSIÓN ROBUSTA) ──────────────────────
+# Reducimos a 60 bytes para asegurar que el comando AT sea corto y seguro
+MAX_PAYLOAD = 60
 chunks = [image_data[i:i+MAX_PAYLOAD] for i in range(0, len(image_data), MAX_PAYLOAD)]
 total_chunks = len(chunks)
 meta = ustruct.pack('>I', len(image_data))
@@ -218,50 +264,52 @@ MAX_VUELTAS = 2
 chunk_idx = -1
 imagen_completada = False
 
-print("\n🚀 [FASE 2] VUELO OPTIMIZADO (Modo SF7)...")
+# Telemetría cada 3 paquetes de imagen
+RATIO_TELEMETRIA = 3
+contador_prioridad = 0
+
+ultimo_dato_sensores = f"0,0,0,0,0,0,0,0,0,0,0,{time.ticks_ms()}"
+
+print(f"\n🚀 [VUELO] Imagen en {total_chunks} fragmentos de {MAX_PAYLOAD} bytes.")
 
 while True:
-    csv_data = get_mock_data()
-    frozen_id = pkt_id
-    print(f"\n[TEL TX] pkt={frozen_id} | Alt: {round(980.9 - 1.5 * pkt_id, 1)}m")
+    # 1. Capturar Telemetría STM32
+    dato_nuevo = obtener_telemetria_real()
+    if dato_nuevo is not None:
+        ultimo_dato_sensores = dato_nuevo
 
-    sent_telemetry = False
-    for attempt in range(MAX_RETRIES):
-        cmd = f"AT+SEND={GROUND_ADDR},{len(csv_data)},{csv_data}\r\n"
-        lora.write(cmd)
-        if not wait_ok(500):
-            time.sleep_ms(300)
-            continue
-        if wait_ack(frozen_id):
-            print("  [ACK] Confirmada ✅")
-            sent_telemetry = True
-            break
+    # 2. Lógica de Envío Intercalado
+    if contador_prioridad < RATIO_TELEMETRIA:
+        # --- CANAL DE DATOS ---
+        csv_data = ultimo_dato_sensores
+        lora.write(f"AT+SEND={GROUND_ADDR},{len(csv_data)},{csv_data}\r\n")
 
-    if not sent_telemetry:
-        print("  [ERR] A ciegas ❌")
+        # Un print corto para saber que vive
+        print(".", end="")
+        contador_prioridad += 1
+        time.sleep_ms(60) # Tiempo entre paquetes de telemetría
 
-    time.sleep_ms(1000)
+    else:
+        # --- CANAL DE IMAGEN ---
+        if not imagen_completada and len(image_data) > 0:
+            if chunk_idx == -1:
+                print(f"\n[IMG] Enviando Meta (V{vuelta_actual})...", end="")
+                if send_image_chunk(lora, 0, total_chunks + 1, meta):
+                    chunk_idx += 1
+            else:
+                if send_image_chunk(lora, chunk_idx + 1, total_chunks + 1, chunks[chunk_idx]):
+                    print(f"[{chunk_idx+1}]", end="")
+                    chunk_idx += 1
+                else:
+                    print("!", end="") # ¡ significa que el LoRa rechazó el paquete (busy)
 
-    # --- B. ENVIAR IMAGEN ---
-    if not imagen_completada and len(image_data) > 0:
-        if chunk_idx == -1:
-            send_image_chunk(lora, 0, total_chunks + 1, meta)
-            chunk_idx += 1
-        else:
-            chunk = chunks[chunk_idx]
-            print(f"[IMG TX] Pkt {chunk_idx + 1}/{total_chunks} (V{vuelta_actual})")
-            send_image_chunk(lora, chunk_idx + 1, total_chunks + 1, chunk)
+                if chunk_idx >= total_chunks:
+                    print(f"\n✅ Vuelta {vuelta_actual} finalizada.")
+                    vuelta_actual += 1
+                    chunk_idx = -1
+                    if vuelta_actual > MAX_VUELTAS:
+                        imagen_completada = True
+                        print("🏁 TRANSMISIÓN DE IMAGEN CERRADA.")
 
-            if chunk_idx == 0 and vuelta_actual == 1:
-                send_image_chunk(lora, chunk_idx + 1, total_chunks + 1, chunk)
-                send_image_chunk(lora, chunk_idx + 1, total_chunks + 1, chunk)
-
-            chunk_idx += 1
-            if chunk_idx >= total_chunks:
-                vuelta_actual += 1
-                chunk_idx = -1
-                if vuelta_actual > MAX_VUELTAS:
-                    imagen_completada = True
-                    print("\n✅ Imagen Enviada. Manteniendo Telemetría...")
-
-    time.sleep_ms(300)
+        # Reiniciar contador para volver a mandar telemetría
+        contador_prioridad = 0
