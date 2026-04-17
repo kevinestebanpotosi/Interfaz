@@ -4,6 +4,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from ui_estilos import BG_GLOBAL, BG_CONTENEDOR, FG_PRINCIPAL, COLOR_ACENTO
 
+
 class TabAnalisis:
     def __init__(self, parent):
         self.frame = tk.Frame(parent, bg=BG_GLOBAL)
@@ -73,20 +74,20 @@ class TabAnalisis:
         frame_graficos.pack(side="right", expand=True, fill="both", padx=10, pady=10)
 
         self.figura = Figure(figsize=(8, 8), dpi=100, facecolor=BG_CONTENEDOR)
-        self.figura.subplots_adjust(hspace=0.5, wspace=0.3) 
-        
+        self.figura.subplots_adjust(hspace=0.5, wspace=0.3)
+
         self.ax_alt = self.figura.add_subplot(321)
         self.ax_alt.set_title("Altitud", fontsize=10, color=FG_PRINCIPAL)
-        
+
         self.ax_pres = self.figura.add_subplot(322)
         self.ax_pres.set_title("Presión Atmosférica", fontsize=10, color=FG_PRINCIPAL)
-        
+
         self.ax_temp = self.figura.add_subplot(323)
         self.ax_temp.set_title("Temperatura", fontsize=10, color=FG_PRINCIPAL)
-        
+
         self.ax_vel = self.figura.add_subplot(324)
         self.ax_vel.set_title("Velocidad de Descenso", fontsize=10, color=FG_PRINCIPAL)
-        
+
         self.ax_acel = self.figura.add_subplot(325)
         self.ax_acel.set_title("Aceleración Z", fontsize=10, color=FG_PRINCIPAL)
 
@@ -221,24 +222,38 @@ class TabAnalisis:
 
         add(self._t_s, t_s)
 
+        # Altitud (acepta 'altitude' o 'altitud')
         try:
-            add(self._alt_m, float(data.get("altitude", "nan")))
+            alt_val = getf("altitude", "altitud")
+            add(self._alt_m, float(alt_val) if alt_val is not None else float("nan"))
         except Exception:
             add(self._alt_m, float("nan"))
+
+        # Presión (acepta 'pressure_hpa' o 'presion_hpa')
         try:
-            add(self._pres_hpa, float(data.get("pressure_hpa", "nan")))
+            pres_val = getf("pressure_hpa", "presion_hpa")
+            add(self._pres_hpa, float(pres_val) if pres_val is not None else float("nan"))
         except Exception:
             add(self._pres_hpa, float("nan"))
+
+        # Temperatura (acepta 'temperature' o 'temperatura')
         try:
-            add(self._temp_c, float(data.get("temperature", "nan")))
+            temp_val = getf("temperature", "temperatura")
+            add(self._temp_c, float(temp_val) if temp_val is not None else float("nan"))
         except Exception:
             add(self._temp_c, float("nan"))
+
+        # Velocidad vertical (vel_mps)
         try:
-            add(self._vel_mps, float(data.get("vel_mps", "nan")))
+            vel_val = getf("vel_mps", "vel_mps")
+            add(self._vel_mps, float(vel_val) if vel_val is not None else float("nan"))
         except Exception:
             add(self._vel_mps, float("nan"))
+
+        # Aceleración Z (acepta 'az_f' o 'az')
         try:
-            add(self._az, float(data.get("az_f", "nan")))
+            az_val = getf("az_f", "az")
+            add(self._az, float(az_val) if az_val is not None else float("nan"))
         except Exception:
             add(self._az, float("nan"))
 
@@ -254,6 +269,10 @@ class TabAnalisis:
             ax.autoscale_view()
 
         self.canvas_grafico.draw_idle()
+
+    def show_recent_image(self, image_bytes: bytes):
+        # mantenido por compatibilidad; no usado en la versión gráfica
+        return
 
     def _crear_indicador(self, parent, titulo, variable, unidad):
         frame = tk.Frame(parent, bg=BG_CONTENEDOR)

@@ -204,9 +204,46 @@ def parse_telemetry(payload: str) -> Optional[Dict[str, str]]:
     antes de retornar el diccionario, para evitar falsos positivos.
     """
     fields = payload.split(",")
-    if len(fields) != len(TELEMETRY_HEADERS):
-        return None
-    return dict(zip(TELEMETRY_HEADERS, fields))
+    if len(fields) == len(TELEMETRY_HEADERS):
+        return dict(zip(TELEMETRY_HEADERS, fields))
+
+    # Fallback: algunos módulos envían una línea empezando por $CS con campos
+    # compactos; intentamos extraer números en orden y mapearlos a las claves
+    # más importantes para la UI (temperatura, presión, altitud, IMU, timestamp).
+    if payload.startswith("$CS") or ", $CS" in payload or payload.startswith("$CS,"):
+        import re
+        nums = re.findall(r"[-+]?[0-9]*\.?[0-9]+", payload)
+        # Expect approx: pkt_id, ?, temperatura, presion, altitud, ax, ay, az, gx, gy, gz, ..., humedad, timestamp
+        out: Dict[str, str] = {}
+        try:
+            if len(nums) >= 1:
+                out["pkt_id"] = nums[0]
+            if len(nums) >= 3:
+                out["temperatura"] = nums[2]
+            if len(nums) >= 4:
+                out["presion_hpa"] = nums[3]
+            if len(nums) >= 5:
+                out["altitud"] = nums[4]
+            # IMU: look for sequences for accel and gyro
+            if len(nums) >= 8:
+                out["ax"] = nums[5]
+                out["ay"] = nums[6]
+                out["az"] = nums[7]
+            if len(nums) >= 11:
+                out["gx"] = nums[8]
+                out["gy"] = nums[9]
+                out["gz"] = nums[10]
+            # humedad near the end
+            if len(nums) >= 12:
+                out["humedad"] = nums[-2]
+                out["timestamp_ms"] = nums[-1]
+        except Exception:
+            pass
+        # Return at least if we have some useful fields
+        if out:
+            return out
+
+    return None
 
 
 def es_probable_imagen(payload: str) -> bool:

@@ -12,7 +12,11 @@ class TabImagenes:
     def __init__(self, parent):
         self.frame = tk.Frame(parent, bg=BG_GLOBAL)
         self.frame.pack(expand=True, fill="both")
-        
+        # Deque para últimas 3 imágenes
+        from collections import deque
+        self._recent = deque(maxlen=3)
+        self._tk_imgs = [None, None, None]
+
         self._construir()
 
     def _construir(self):
@@ -20,53 +24,53 @@ class TabImagenes:
         self.frame.columnconfigure(1, weight=1)
         self.frame.rowconfigure(0, weight=1)
 
-        frame_img_izq = ttk.LabelFrame(self.frame, text=" Cámara Abordo (Cruda) ")
-        frame_img_izq.grid(row=0, column=0, sticky="nsew", padx=15, pady=15)
-        self.canvas_left = tk.Canvas(frame_img_izq, bg=BG_CONTENEDOR)
-        self.canvas_left.pack(expand=True, fill="both", padx=5, pady=5)
+        # Tres slots: izquierda (cruda), centro (anaglifo/procesada), derecha (estéreo)
+        frame_row = tk.Frame(self.frame, bg=BG_GLOBAL)
+        frame_row.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=15, pady=15)
 
+        self.canvas_left = tk.Canvas(frame_row, bg=BG_CONTENEDOR)
+        self.canvas_center = tk.Canvas(frame_row, bg=BG_CONTENEDOR)
+        self.canvas_right = tk.Canvas(frame_row, bg=BG_CONTENEDOR)
 
-        frame_img_der = ttk.LabelFrame(self.frame, text=" Procesado Estereoscópico 3D ")
-        frame_img_der.grid(row=0, column=1, sticky="nsew", padx=15, pady=15)
-        self.canvas_right = tk.Canvas(frame_img_der, bg=BG_CONTENEDOR)
-        self.canvas_right.pack(expand=True, fill="both", padx=5, pady=5)
+        self.canvas_left.pack(side="left", expand=True, fill="both", padx=5, pady=5)
+        self.canvas_center.pack(side="left", expand=True, fill="both", padx=5, pady=5)
+        self.canvas_right.pack(side="left", expand=True, fill="both", padx=5, pady=5)
 
         self._left_img_tk = None
+        self._center_img_tk = None
         self._right_img_tk = None
 
     def show_image(self, image_bytes: bytes):
+        # Guardar en deque y actualizar los 3 canvases (más reciente en la izquierda)
         try:
-            img = Image.open(io.BytesIO(image_bytes))
-            # Forzar la decodificación inmediata para atrapar errores antes de procesar
-            img.load()
+            from PIL import ImageFile
+            ImageFile.LOAD_TRUNCATED_IMAGES = True
+            self._recent.appendleft(image_bytes)
         except Exception as e:
-            print(f"[UI ERROR] No se pudo procesar la imagen: {e}")
+            print(f"[UI ERROR] No se pudo almacenar imagen: {e}")
             return
 
-        # --- LIENZO IZQUIERDO ---
-        w = self.canvas_left.winfo_width()
-        h = self.canvas_left.winfo_height()
-        
-        # Blindaje: Si la pestaña no está visible, winfo_width devuelve 1. 
-        # Se fuerza un tamaño estándar para evitar generar una imagen invisible de 1x1 píxel.
-        if w < 10: w = 400
-        if h < 10: h = 300
+        canvases = [self.canvas_left, self.canvas_center, self.canvas_right]
+        tk_slots = ['_left_img_tk', '_center_img_tk', '_right_img_tk']
 
-        img_l = img.copy()
-        img_l.thumbnail((w, h), Image.Resampling.LANCZOS)
-        self._left_img_tk = ImageTk.PhotoImage(img_l)
-        self.canvas_left.delete("all")
-        self.canvas_left.create_image(w // 2, h // 2, image=self._left_img_tk, anchor="center")
-
-        # --- LIENZO DERECHO ---
-        wr = self.canvas_right.winfo_width()
-        hr = self.canvas_right.winfo_height()
-        
-        if wr < 10: wr = 400
-        if hr < 10: hr = 300
-
-        img_r = img.copy()
-        img_r.thumbnail((wr, hr), Image.Resampling.LANCZOS)
-        self._right_img_tk = ImageTk.PhotoImage(img_r)
-        self.canvas_right.delete("all")
-        self.canvas_right.create_image(wr // 2, hr // 2, image=self._right_img_tk, anchor="center")
+        for i, canvas in enumerate(canvases):
+            canvas.delete("all")
+            try:
+                b = self._recent[i]
+            except Exception:
+                b = None
+            if b is None:
+                continue
+            try:
+                img = Image.open(io.BytesIO(b))
+                img.load()
+                w = canvas.winfo_width() or 300
+                h = canvas.winfo_height() or 200
+                if w < 10: w = 300
+                if h < 10: h = 200
+                img.thumbnail((w, h), Image.Resampling.LANCZOS)
+                setattr(self, tk_slots[i], ImageTk.PhotoImage(img))
+                canvas.create_image(w // 2, h // 2, image=getattr(self, tk_slots[i]), anchor="center")
+            except Exception as e:
+                print(f"[UI ERROR] No se pudo mostrar slot {i+1}: {e}")
+                continue

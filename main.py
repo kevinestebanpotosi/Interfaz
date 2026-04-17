@@ -46,6 +46,9 @@ class EstacionTerrenaCanSat:
         self.notebook.add(self.tab_config.frame, text="⚙️ Configuración")
 
         self.root.after(50, self._drain_events)
+        # Track images saved to disk (by wifi.py or telemetry_receiver) and display them
+        self._seen_images = set()
+        self.root.after(1000, self._scan_saved_images)
 
     def _on_connect(self, port: str, baudrate: int):
         self._receiver.start(port, baudrate)
@@ -93,6 +96,31 @@ class EstacionTerrenaCanSat:
                     self.tab_monitor.show_event(kind="warn", message=f"Image event handling error: {e}")
 
         self.root.after(50, self._drain_events)
+
+    def _scan_saved_images(self):
+        """Scan filesystem for newly saved images and display them in the images tab.
+
+        This catches files saved by `wifi.py` (anaglifo_captura_*.jpg) and by
+        `telemetry_receiver.py` (captura_*.jpg in `capturas/`)."""
+        import glob
+        import os
+
+        patterns = ["anaglifo_captura_*.jpg", os.path.join("capturas", "captura_*.jpg")]
+        for pat in patterns:
+            for path in sorted(glob.glob(pat), key=os.path.getmtime):
+                if path in self._seen_images:
+                    continue
+                try:
+                    with open(path, "rb") as f:
+                        data = f.read()
+                    self.tab_imagenes.show_image(data)
+                    self._seen_images.add(path)
+                    self.tab_monitor.show_event(kind="status", message=f"Loaded saved image: {path}")
+                except Exception as e:
+                    self.tab_monitor.show_event(kind="warn", message=f"Failed to load saved image {path}: {e}")
+
+        # reschedule
+        self.root.after(1000, self._scan_saved_images)
 
 if __name__ == "__main__":
     root = tk.Tk()
